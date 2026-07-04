@@ -1,0 +1,158 @@
+name: Build SDM845 Kernels
+
+# Builds the DroidSpaces + susfs 2.2.0 kernel for every Xiaomi SDM845 device.
+# Each device = mi845_defconfig + vendor/xiaomi/<device>.config + droidspaces.config,
+# packaged into a per-device AnyKernel3 flashable zip.
+
+on:
+  workflow_dispatch:
+    inputs:
+      devices:
+        description: "Devices to build: space-separated codenames or 'all'"
+        default: "all"
+      make_release:
+        description: "Attach zips to a release with this tag (blank = artifacts only)"
+        default: ""
+  push:
+    tags:
+      - "droidspaces-*"   # tag push builds all devices and attaches to that release
+
+env:
+  # ZyC clang (same toolchain family as the local build). Swap to pin a version, e.g.:
+  #   https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-16-link.txt
+  CLANG_LINK_FILE: "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt"
+  # ccache-ECS (cctv18) — faster ccache fork for kernel builds. Static x86_64 binary.
+  CCACHE_ECS_URL: "https://github.com/cctv18/ccache-ECS/releases/download/ccache-ECS-v1.0/linux-x86_64-musl-static-binary.zip"
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        name: Compute device matrix
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            sel="all"
+          else
+            sel="${{ github.event.inputs.devices }}"
+          fi
+          if [ -z "$sel" ] || [ "$sel" = "all" ]; then
+            sel="beryllium dipper equuleus perseus polaris ursa"
+          fi
+          arr=$(printf '%s\n' $sel | jq -R . | jq -sc .)
+          echo "matrix={\"device\":$arr}" >> "$GITHUB_OUTPUT"
+          echo "Building: $sel"
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libssl-dev libelf-dev make git zip unzip curl \
+            libncurses-dev gcc python3 cpio gzip lz4
+
+      - name: Set up ccache-ECS (cctv18)
+        run: |
+          mkdir -p "$HOME/ccache-ECS"
+          curl -fSL -o /tmp/ccache-ecs.zip "$CCACHE_ECS_URL"
+          unzip -oq /tmp/ccache-ecs.zip -d "$HOME/ccache-ECS"
+          chmod +x "$HOME/ccache-ECS/ccache"
+          echo "$HOME/ccache-ECS" >> "$GITHUB_PATH"
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ matrix.device }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ matrix.device }}-
+            ccache-
+
+      - name: Download ZyC clang
+        run: |
+          mkdir -p "$HOME/clang"
+          url="$(curl -fsSL "$CLANG_LINK_FILE" | tr -d ' \r\n')"
+          echo "clang tarball: $url"
+          curl -fSL -o /tmp/clang.tar.gz "$url"
+          tar -xzf /tmp/clang.tar.gz -C "$HOME/clang"
+          # ZyC tarballs may or may not have a top-level dir; find the bin/clang.
+          clang_bin="$(dirname "$(find "$HOME/clang" -type f -path '*/bin/clang' | head -1)")"
+          echo "clang bin dir: $clang_bin"
+          echo "$clang_bin" >> "$GITHUB_PATH"
+
+      - name: Build ${{ matrix.device }}
+        run: |
+          export ARCH=arm64 SUBARCH=arm64
+          export KBUILD_BUILD_USER=github-actions KBUILD_BUILD_HOST=sdm845-ci
+          ccache -M 5G >/dev/null 2>&1 || true
+          ccache -z >/dev/null 2>&1 || true
+
+          make O=out ARCH=arm64 mrproper
+          make O=out ARCH=arm64 vendor/xiaomi/mi845_defconfig
+          scripts/kconfig/merge_config.sh -O out out/.config \
+            arch/arm64/configs/vendor/xiaomi/${{ matrix.device }}.config \
+            arch/arm64/configs/vendor/xiaomi/droidspaces.config
+
+          # never let a stale image be packaged as a success
+          rm -f out/arch/arm64/boot/Image.gz-dtb
+
+          make -j"$(nproc)" O=out ARCH=arm64 \
+            CC="ccache clang -fuse-ld=lld" LD=ld.lld \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            LLVM_IAS=1 KCFLAGS="-Wno-error"
+
+          test -f out/arch/arm64/boot/Image.gz-dtb || { echo "::error::${{ matrix.device }}: kernel image not produced"; exit 1; }
+          ccache -s 2>/dev/null | grep -iE "hits|miss" || true
+
+      - name: Package with AnyKernel3
+        run: |
+          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          cd AnyKernel3
+          sed -i "s/^device\.name1=.*/device.name1=${{ matrix.device }}/" anykernel.sh
+          NAME="DroidSpaces-${{ matrix.device }}-lineage22.2-$(date +%Y%m%d).zip"
+          zip -r9 "$NAME" * -x '.git*' '.github/*' README.md '*.zip' >/dev/null
+          echo "ZIP_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "ZIP_PATH=$PWD/$NAME" >> "$GITHUB_ENV"
+          echo "Packaged: $NAME"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_PATH }}
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: github.event_name == 'push' || github.event.inputs.make_release != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="${{ github.event.inputs.make_release }}"
+          fi
+          # Tolerate the race where parallel matrix jobs both create the release.
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" \
+              --title "SDM845 DroidSpaces kernels ($TAG)" \
+              --notes "Automated DroidSpaces + susfs v2.2.0 builds for Xiaomi SDM845 devices." \
+              || true
+          gh release upload "$TAG" "$ZIP_PATH" --clobber

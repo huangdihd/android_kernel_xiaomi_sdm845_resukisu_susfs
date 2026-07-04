@@ -11,6 +11,8 @@
 #
 .*
 !.gitmodules
+!/.github
+!/.github/**
 *.o
 *.o.*
 *.a
