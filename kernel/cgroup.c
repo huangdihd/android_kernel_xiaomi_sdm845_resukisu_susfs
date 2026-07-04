@@ -3846,6 +3846,19 @@ static int cgroup_add_file(struct cgroup_subsys_state *css, struct cgroup *cgrp,
 		spin_unlock_irq(&cgroup_file_kn_lock);
 	}
 
+	/*
+	 * Droidspaces/LXC compatibility: when a hierarchy is mounted with
+	 * noprefix (as Android does), also expose a subsys-prefixed alias
+	 * (e.g. "cpu.stat") as a symlink so container runtimes that expect
+	 * prefixed cgroup file names keep working.
+	 */
+	if (cft->ss && (cgrp->root->flags & CGRP_ROOT_NOPREFIX) &&
+	    !(cft->flags & CFTYPE_NO_PREFIX)) {
+		snprintf(name, CGROUP_FILE_NAME_MAX, "%s.%s",
+			 cft->ss->name, cft->name);
+		kernfs_create_link(cgrp->kn, name, kn);
+	}
+
 	return 0;
 }
 

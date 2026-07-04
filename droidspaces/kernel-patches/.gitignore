@@ -1,0 +1,3 @@
+# The top-level .gitignore ignores *.patch; keep the vendored DroidSpaces
+# reference patches tracked.
+!*.patch
