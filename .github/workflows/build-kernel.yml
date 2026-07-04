@@ -91,10 +91,14 @@ jobs:
           echo "clang tarball: $url"
           curl -fSL -o /tmp/clang.tar.gz "$url"
           tar -xzf /tmp/clang.tar.gz -C "$HOME/clang"
-          # ZyC tarballs may or may not have a top-level dir; find the bin/clang.
-          clang_bin="$(dirname "$(find "$HOME/clang" -type f -path '*/bin/clang' | head -1)")"
+          # bin/clang is a symlink, so locate the real clang-NN binary; its dir is the toolchain bin.
+          clang_bin="$(dirname "$(find "$HOME/clang" -type f -name 'clang-[0-9]*' | head -1)")"
           echo "clang bin dir: $clang_bin"
+          # Fail loudly instead of silently falling back to the runner's system clang.
+          test -x "$clang_bin/clang"   || { echo "::error::clang not found in toolchain";  exit 1; }
+          test -x "$clang_bin/ld.lld"  || { echo "::error::ld.lld not found in toolchain"; exit 1; }
           echo "$clang_bin" >> "$GITHUB_PATH"
+          "$clang_bin/clang" --version | head -1
 
       - name: Build ${{ matrix.device }}
         run: |
