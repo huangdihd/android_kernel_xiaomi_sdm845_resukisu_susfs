@@ -18,9 +18,10 @@ on:
       - "droidspaces-*"   # tag push builds all devices and attaches to that release
 
 env:
-  # ZyC clang (same toolchain family as the local build). Swap to pin a version, e.g.:
-  #   https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-16-link.txt
-  CLANG_LINK_FILE: "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt"
+  # ZyC clang (same toolchain family as the local build). Clang 16 is a stable
+  # choice for this 4.9 tree. Swap for another version if desired:
+  #   Clang-main-link.txt (latest, currently clang 23), Clang-15-link.txt, Clang-14-link.txt
+  CLANG_LINK_FILE: "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-16-link.txt"
   # ccache-ECS (cctv18) — faster ccache fork for kernel builds. Static x86_64 binary.
   CCACHE_ECS_URL: "https://github.com/cctv18/ccache-ECS/releases/download/ccache-ECS-v1.0/linux-x86_64-musl-static-binary.zip"
 
