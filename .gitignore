@@ -10,6 +10,7 @@
 # Normal rules
 #
 .*
+!.gitmodules
 *.o
 *.o.*
 *.a
