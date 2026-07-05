@@ -175,6 +175,6 @@ jobs:
           echo "Publishing ${#zips[@]} zip(s) to release $TAG:"; printf ' - %s\n' "${zips[@]}"
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-              --title "SDM845 DroidSpaces kernels ($TAG)" \
+              --title "Xiaomi SDM845 Kernel — DroidSpaces + susfs v2.2.0 + KernelSU ($TAG)" \
               --notes "Automated DroidSpaces + susfs v2.2.0 builds for Xiaomi SDM845 devices (beryllium, dipper, equuleus, perseus, polaris, ursa). Flash the zip matching your device via custom recovery."
           gh release upload "$TAG" "${zips[@]}" --repo "$GITHUB_REPOSITORY" --clobber
