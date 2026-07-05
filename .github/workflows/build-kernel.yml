@@ -217,6 +217,18 @@ jobs:
             echo "Telegram secrets not configured (TG_BOT_TOKEN / TG_CHAT_ID). Skipping."
             exit 0
           fi
+          # TG_CHAT_ID is "chat_id" or "chat_id:topic_id" (for forum/topic groups).
+          if [[ "$TG_CHAT_ID" == *:* ]]; then
+            ID="${TG_CHAT_ID%%:*}"; THREAD="${TG_CHAT_ID##*:}"
+          else
+            ID="$TG_CHAT_ID"; THREAD=""
+          fi
+          # Derive a public group link from an @username chat id.
+          if [[ "$ID" == @* ]]; then GROUP_URL="https://t.me/${ID#@}"; else GROUP_URL=""; fi
+          JOIN_LINE=""
+          [ -n "$GROUP_URL" ] && JOIN_LINE="
+          📢 <a href=\"${GROUP_URL}\"><b>JOIN TELEGRAM GROUP</b></a>"
+
           REL_URL="${{ github.server_url }}/${{ github.repository }}/releases/tag/${REL_NAME}"
           MSG_TEXT="🚀 <b>Xiaomi SDM845 DroidSpaces Kernel — build successful!</b>
           ━━━━━━━━━━━━━━━━━━
@@ -227,14 +239,7 @@ jobs:
           <b>🌐 DroidSpaces:</b> Supported
           <b>📡 Baseband-guard:</b> Supported
           ━━━━━━━━━━━━━━━━━━
-          👉 <a href=\"${REL_URL}\"><b>📥 GET YOUR KERNEL HERE</b></a>"
-
-          # TG_CHAT_ID is "chat_id" or "chat_id:topic_id" (for forum/topic groups).
-          if [[ "$TG_CHAT_ID" == *:* ]]; then
-            ID="${TG_CHAT_ID%%:*}"; THREAD="${TG_CHAT_ID##*:}"
-          else
-            ID="$TG_CHAT_ID"; THREAD=""
-          fi
+          👉 <a href=\"${REL_URL}\"><b>📥 GET YOUR KERNEL HERE</b></a>${JOIN_LINE}"
           PAYLOAD=$(jq -n --arg chat_id "$ID" --arg text "$MSG_TEXT" --arg thread "$THREAD" \
             '{chat_id:$chat_id, parse_mode:"HTML", disable_web_page_preview:true, text:$text}
              + (if $thread != "" then {message_thread_id: ($thread|tonumber)} else {} end)')
