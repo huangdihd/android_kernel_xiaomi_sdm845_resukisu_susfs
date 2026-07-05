@@ -11,8 +11,9 @@ on:
         description: "Devices to build: space-separated codenames or 'all'"
         default: "all"
       make_release:
-        description: "Publish the zips to a release with this tag (blank = artifacts only)"
-        default: ""
+        description: "Publish a new timestamped release with the built zips"
+        type: boolean
+        default: false
   push:
     tags:
       - "droidspaces-*"   # tag push builds all devices and publishes to that release
@@ -33,25 +34,24 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
-      release_tag: ${{ steps.set.outputs.release_tag }}
+      do_release: ${{ steps.set.outputs.do_release }}
     steps:
       - id: set
-        name: Compute device matrix and release tag
+        name: Compute device matrix
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
-            sel="all"
-            tag="${{ github.ref_name }}"
+            sel="all"; dorel="true"
           else
             sel="${{ github.event.inputs.devices }}"
-            tag="${{ github.event.inputs.make_release }}"
+            dorel="${{ github.event.inputs.make_release }}"
           fi
           if [ -z "$sel" ] || [ "$sel" = "all" ]; then
             sel="beryllium dipper equuleus perseus polaris ursa"
           fi
           arr=$(printf '%s\n' $sel | jq -R . | jq -sc .)
           echo "matrix={\"device\":$arr}" >> "$GITHUB_OUTPUT"
-          echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Building: $sel   release tag: '${tag:-<none>}'"
+          echo "do_release=${dorel:-false}" >> "$GITHUB_OUTPUT"
+          echo "Building: $sel   release: ${dorel:-false}"
 
   build:
     needs: prepare
@@ -151,30 +151,55 @@ jobs:
           path: ${{ env.ZIP_PATH }}
           if-no-files-found: error
 
-  # Single serial job publishes every built zip — avoids the race where parallel
-  # matrix jobs all try to create/upload the same release at once.
+  # Cupid-style: each build publishes a brand-new, timestamped release with all
+  # zips (never overwrites a previous one). Single serial job avoids the race
+  # where parallel matrix jobs would clash on the same release.
   release:
     needs: [prepare, build]
-    if: ${{ !cancelled() && needs.prepare.outputs.release_tag != '' }}
+    if: ${{ !cancelled() && needs.prepare.outputs.do_release == 'true' }}
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout (read susfs version)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Download all built zips
         uses: actions/download-artifact@v4
         with:
           path: dist
 
-      - name: Publish release
+      - name: Publish timestamped release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ needs.prepare.outputs.release_tag }}"
           mapfile -t zips < <(find dist -type f -name '*.zip' | sort)
           if [ "${#zips[@]}" -eq 0 ]; then
             echo "::error::no kernel zips were built — nothing to publish"; exit 1
           fi
-          echo "Publishing ${#zips[@]} zip(s) to release $TAG:"; printf ' - %s\n' "${zips[@]}"
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-              --title "Xiaomi SDM845 Kernel — DroidSpaces + susfs v2.2.0 + KernelSU ($TAG)" \
-              --notes "Automated DroidSpaces + susfs v2.2.0 builds for Xiaomi SDM845 devices (beryllium, dipper, equuleus, perseus, polaris, ursa). Flash the zip matching your device via custom recovery."
-          gh release upload "$TAG" "${zips[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          BUILD_TIME=$(date -u +"%Y%m%d_%H%M")
+          SUSFS_VER=$(grep -m1 '#define SUSFS_VERSION' include/linux/susfs.h | awk -F'"' '{print $2}')
+          if [ "${{ github.event_name }}" = "push" ]; then
+            REL_NAME="${{ github.ref_name }}"
+          else
+            REL_NAME="SDM845-DroidSpaces-susfs${SUSFS_VER}-${BUILD_TIME}"
+          fi
+          echo "Publishing ${#zips[@]} zip(s) as new release: $REL_NAME"
+          cat > notes.md <<EOF
+          # DroidSpaces kernel for Xiaomi SDM845 (all devices)
+
+          | feature | value |
+          | --- | --- |
+          | Devices | beryllium · dipper · equuleus · perseus · polaris · ursa |
+          | Build time (UTC) | ${BUILD_TIME} |
+          | SUSFS | ${SUSFS_VER} |
+          | KernelSU | ReSukiSU |
+          | DroidSpaces | Supported |
+          | Baseband-guard | Supported |
+
+          Flash the zip matching your device in a custom recovery (Apply update -> ADB sideload). Back up your boot partition first.
+          EOF
+          gh release create "$REL_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "$REL_NAME" \
+            --notes-file notes.md \
+            "${zips[@]}"
